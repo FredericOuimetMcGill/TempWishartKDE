@@ -15,7 +15,7 @@ libraries_to_load <- c(
   "fs",
   "future.batchtools",
   "parallel",
-  "ksm" # ADDED
+  "ksm"
 )
 
 # Define the list of variables/functions to export to the worker nodes
@@ -28,7 +28,7 @@ vars_to_export <- c(
   "IAE",
   "kernels",
   "libraries_to_load",
-  "logISE",
+  "ISE",
   "Mmod",
   "K",
   "models",
@@ -81,6 +81,7 @@ invisible(
 #' @param Smod covariance matrix of VAR components
 #' @param K degrees of freedom
 #' @return a cube of dimension 2 by 2 by \code{n}.
+
 simu_rWAR <- function(
   n,
   Mmod = c("M1", "M2", "M3"),
@@ -129,12 +130,14 @@ simu_rWAR <- function(
     K = K
   )
 }
+
 #' Simulation study asymptotic density for dependent
 #' @param x array of positive definite matrices of size 2 by 2 by \code{n}.
 #' @param Mmod model for autoregressive coefficients matrix
 #' @param Smod covariance matrix of VAR components
 #' @param K degrees of freedom
 #' @return a vector of density functions
+
 simu_fdens_WAR <- function(
   x,
   Mmod = c("M1", "M2", "M3"),
@@ -143,9 +146,8 @@ simu_fdens_WAR <- function(
 ) {
   Mmod <- match.arg(Mmod)
   Smod <- match.arg(Smod)
-  n <- as.integer(n)
   K <- as.integer(K)
-  stopifnot(n >= 1, K >= 2) # otherwise matrix not invertible / degenerate
+  stopifnot(K >= 2) # otherwise matrix not invertible / degenerate
   if (Mmod == "M1") {
     M <- matrix(
       c(0.9, 0, 1, 0),
@@ -194,13 +196,13 @@ simu_fdens_WAR <- function(
 #' @param return double with value of the integrated squared error
 #' @param ... additional parameters, currently ignored
 
-logISE <- function(
+ISE <- function(
   x,
   bandwidth,
   fdens,
   kernel = c("Wishart", "smlnorm", "smnorm"),
   tol = 1e-3,
-  lb = 1e-5,
+  lb = 0,
   ub = Inf,
   neval = 1e6L,
   method = c("suave", "hcubature"),
@@ -268,8 +270,8 @@ logISE <- function(
   )
 
   # print(result)
-  # Return the result of the integral
-  return(log(result$integral))
+  # Return the result of the integral * 10^7
+  return(1e7 * result$integral)
 }
 
 ##################
@@ -288,7 +290,7 @@ cores_per_node <- 64 # number of cores for each node in the super-computer
 resources_list <- list(
   cpus_per_task = cores_per_node,
   mem = "240G",
-  walltime = "0:05:00",
+  walltime = "24:00:00",
   nodes = 1
   # Omit 'partition' to let SLURM choose
 )
@@ -297,10 +299,10 @@ resources_list <- list(
 ## Hyper-parameters         ##
 ##############################
 
-RR <- 1:128 # replications
-nobs <- c(125L)
-Mmod <- c("M1")
-Smod <- c("S1")
+RR <- 1:1024 # replications
+nobs <- c(125L, 250L, 500L)
+Mmod <- c("M1", "M2", "M3")
+Smod <- c("S1", "S2", "S3")
 kernels <- c("Wishart", "smlnorm")
 K <- 4
 
@@ -332,7 +334,7 @@ raw_results <- data.frame(
   Mmod = integer(),
   Smod = integer(),
   kernel = character(),
-  logISE = numeric(),
+  ISE = numeric(),
   bandwidth = numeric(),
   timing = numeric()
 )
@@ -359,7 +361,7 @@ res <- foreach::foreach(
       Mmod = integer(),
       Smod = integer(),
       kernel = character(),
-      logISE = numeric(),
+      ISE = numeric(),
       bandwidth = numeric(),
       timing = numeric()
     )
@@ -394,23 +396,23 @@ res <- foreach::foreach(
                 kernel = kernels[l]
               )
 
-              log_ISE <- try(
-                logISE(
+              try_ISE <- try(
+                ISE(
                   x = xs,
                   bandwidth = band,
                   fdens = function(x) {
                     simu_fdens_WAR(x = x, Mmod = Mmod[j], Smod = Smod[k], K = K)
                   },
-                  kernel = kernels[k],
-                  lb = 1e-5, # avoid problems with matrices nearly non PSD, which are caught by sensitive Cpp routine
+                  kernel = kernels[l],
+                  lb = 0,
                   ub = Inf,
                   tol = 1e-3,
                   method = "hcubature"
                 ),
                 silent = FALSE
               )
-              if (inherits(log_ISE, "try-error")) {
-                log_ISE <- NA
+              if (inherits(try_ISE, "try-error")) {
+                try_ISE <- NA
               }
               timing <- as.numeric(difftime(
                 Sys.time(),
@@ -423,7 +425,7 @@ res <- foreach::foreach(
                 Mmod = j,
                 Smod = k,
                 kernel = kernels[l],
-                logISE = log_ISE,
+                ISE = try_ISE,
                 bandwidth = band,
                 timing = timing
               )
@@ -491,10 +493,10 @@ summ_list <- lapply(split(raw_results, .grp), function(df) {
     Smod = df$Smod[1],
     kernel = df$kernel[1],
     # ISE stats
-    mean_ISE = mean(df$logISE, na.rm = TRUE),
-    sd_ISE = sd(df$logISE, na.rm = TRUE),
-    median_ISE = median(df$logISE, na.rm = TRUE),
-    IQR_ISE = IQR(df$logISE, na.rm = TRUE),
+    mean_ISE = mean(df$ISE, na.rm = TRUE),
+    sd_ISE = sd(df$ISE, na.rm = TRUE),
+    median_ISE = median(df$ISE, na.rm = TRUE),
+    IQR_ISE = IQR(df$ISE, na.rm = TRUE),
     mean_time_min = mean(df$timing, na.rm = TRUE) / 60,
     stringsAsFactors = FALSE
   )
