@@ -49,18 +49,18 @@ vars_to_export <- c(
 setup_parallel_cluster <- function() {
   num_cores <<- detectCores()
   cl <<- makeCluster(num_cores)
-
+  
   # Export the list of libraries to the worker nodes
   clusterExport(cl, varlist = "libraries_to_load")
-
+  
   # Load necessary libraries on each cluster node
   invisible(clusterEvalQ(cl, {
     lapply(libraries_to_load, library, character.only = TRUE)
   }))
-
+  
   # Export all necessary objects, functions, and parameters to the worker nodes
   clusterExport(cl, varlist = vars_to_export)
-
+  
   return(cl) # Return the cluster object
 }
 
@@ -83,10 +83,10 @@ invisible(
 #' @return a cube of dimension 2 by 2 by \code{n}.
 
 simu_rWAR <- function(
-  n,
-  Mmod = c("M1", "M2", "M3"),
-  Smod = c("S1", "S2", "S3"),
-  K = 2L
+    n,
+    Mmod = c("M1", "M2", "M3"),
+    Smod = c("S1", "S2", "S3"),
+    K = 2L
 ) {
   Mmod <- match.arg(Mmod)
   Smod <- match.arg(Smod)
@@ -139,10 +139,10 @@ simu_rWAR <- function(
 #' @return a vector of density functions
 
 simu_fdens_WAR <- function(
-  x,
-  Mmod = c("M1", "M2", "M3"),
-  Smod = c("S1", "S2", "S3"),
-  K = 2L
+    x,
+    Mmod = c("M1", "M2", "M3"),
+    Smod = c("S1", "S2", "S3"),
+    K = 2L
 ) {
   Mmod <- match.arg(Mmod)
   Smod <- match.arg(Smod)
@@ -178,7 +178,7 @@ simu_fdens_WAR <- function(
       ncol = 2
     )
   }
-
+  
   Sigma_inf <- ksm::Riccati(M = M, S = S)$solution
   c(ksm::dWishart(x, df = K, S = Sigma_inf, log = FALSE))
 }
@@ -197,16 +197,16 @@ simu_fdens_WAR <- function(
 #' @param ... additional parameters, currently ignored
 
 ISE <- function(
-  x,
-  bandwidth,
-  fdens,
-  kernel = c("Wishart", "smlnorm", "smnorm"),
-  tol = 1e-3,
-  lb = 0,
-  ub = Inf,
-  neval = 1e6L,
-  method = c("suave", "hcubature"),
-  ...
+    x,
+    bandwidth,
+    fdens,
+    kernel = c("Wishart", "smlnorm", "smnorm"),
+    tol = 1e-3,
+    lb = 0,
+    ub = Inf,
+    neval = 1e6L,
+    method = c("suave", "hcubature"),
+    ...
 ) {
   method <- match.arg(
     method[1],
@@ -237,7 +237,7 @@ ISE <- function(
         24
     }
     S <- array(S, dim = c(nrow(S), ncol(S), 1))
-
+    
     # Compute the squared difference between the kernel and the target density
     diff_squared <- (ksm::kdens_symmat(
       x = S,
@@ -247,7 +247,7 @@ ISE <- function(
       log = FALSE
     ) -
       fdens(S))^2
-
+    
     # Return the product of diff_squared and the Jacobian factor
     return(diff_squared * jacobian_value)
   }
@@ -268,7 +268,7 @@ ISE <- function(
     maxEval = neval,
     kernel = kernel
   )
-
+  
   # print(result)
   # Return the result of the integral * 10^6
   return(1e6 * result$integral)
@@ -304,6 +304,7 @@ nobs <- c(125L, 250L, 500L)
 Mmod <- c("M1", "M2", "M3")
 Smod <- c("S1", "S2", "S3")
 kernels <- c("Wishart", "smlnorm")
+criteria <- c("lscv", "lcv")
 K <- 4
 
 ###############
@@ -334,6 +335,7 @@ raw_results <- data.frame(
   Mmod = integer(),
   Smod = integer(),
   kernel = character(),
+  criterion = character(),
   ISE = numeric(),
   bandwidth = numeric(),
   timing = numeric()
@@ -355,96 +357,103 @@ res <- foreach::foreach(
   {
     # spin up a per-node PSOCK cluster
     cl <- setup_parallel_cluster()
-
+    
     block_results <- data.frame(
       nobs = integer(),
       Mmod = integer(),
       Smod = integer(),
       kernel = character(),
+      criterion = character(),
       ISE = numeric(),
       bandwidth = numeric(),
       timing = numeric()
     )
-
+    
     # each r in this block runs in parallel across the node's cores
     r_list <- parallel::parLapply(cl, X = block, fun = function(r_local) {
       set.seed(r_local)
-
+      
       out_rows_all <- vector(
         "list",
         length(nobs) * length(Mmod) * length(Smod)
       )
       idx_out <- 0L
-
+      
       for (i in seq_along(nobs)) {
         for (j in seq_along(Mmod)) {
           for (k in seq_along(Smod)) {
-            local_rows <- vector("list", length(kernels))
-
+            local_rows <- vector("list", length(kernels) * length(criteria))
+            
             xs <- simu_rWAR(
               n = nobs[i],
               Mmod = Mmod[j],
               Smod = Smod[k],
               K = K # degrees of freedom must be at least d
             )
+            
+            idx_local <- 0L
             for (l in seq_along(kernels)) {
-              start_time <- Sys.time()
-              band <- ksm:::bandwidth_optim(
-                x = xs,
-                criterion = "lscv",
-                h = ceiling(nobs[i]^0.25), # adjustment for serial dependence
-                kernel = kernels[l]
-              )
-
-              try_ISE <- try(
-                ISE(
+              for (c_idx in seq_along(criteria)) {
+                start_time <- Sys.time()
+                band <- ksm:::bandwidth_optim(
                   x = xs,
-                  bandwidth = band,
-                  fdens = function(x) {
-                    simu_fdens_WAR(x = x, Mmod = Mmod[j], Smod = Smod[k], K = K)
-                  },
+                  criterion = criteria[c_idx],
+                  h = ceiling(nobs[i]^0.25), # adjustment for serial dependence
+                  kernel = kernels[l]
+                )
+                
+                try_ISE <- try(
+                  ISE(
+                    x = xs,
+                    bandwidth = band,
+                    fdens = function(x) {
+                      simu_fdens_WAR(x = x, Mmod = Mmod[j], Smod = Smod[k], K = K)
+                    },
+                    kernel = kernels[l],
+                    lb = 0,
+                    ub = Inf,
+                    tol = 1e-3,
+                    method = "hcubature"
+                  ),
+                  silent = FALSE
+                )
+                if (inherits(try_ISE, "try-error")) {
+                  try_ISE <- NA
+                }
+                timing <- as.numeric(difftime(
+                  Sys.time(),
+                  start_time,
+                  units = "secs"
+                ))
+                
+                idx_local <- idx_local + 1L
+                local_rows[[idx_local]] <- data.frame(
+                  nobs = nobs[i],
+                  Mmod = j,
+                  Smod = k,
                   kernel = kernels[l],
-                  lb = 0,
-                  ub = Inf,
-                  tol = 1e-3,
-                  method = "hcubature"
-                ),
-                silent = FALSE
-              )
-              if (inherits(try_ISE, "try-error")) {
-                try_ISE <- NA
+                  criterion = criteria[c_idx],
+                  ISE = try_ISE,
+                  bandwidth = band,
+                  timing = timing
+                )
               }
-              timing <- as.numeric(difftime(
-                Sys.time(),
-                start_time,
-                units = "secs"
-              ))
-
-              local_rows[[l]] <- data.frame(
-                nobs = nobs[i],
-                Mmod = j,
-                Smod = k,
-                kernel = kernels[l],
-                ISE = try_ISE,
-                bandwidth = band,
-                timing = timing
-              )
             }
-
+            
             idx_out <- idx_out + 1L
             out_rows_all[[idx_out]] <- do.call(rbind, local_rows)
           }
         }
       }
-
+      
       do.call(rbind, out_rows_all)
     })
-
+    
     block_results <- rbind(block_results, do.call(rbind, r_list))
-
+    
     # tear down the per-node cluster
     try(parallel::stopCluster(cl), silent = TRUE)
-
+    
     block_results
   }
 
@@ -472,10 +481,11 @@ print("Raw results saved to raw_ISE_dep.csv")
 ## Process the results ##
 #########################
 
-# Build a summary table by (nobs, Mmod, Smod, kernel)
+# Build a summary table by (nobs, Mmod, Smod, kernel, criterion)
 
 # Guard against accidental factor coercion
 raw_results$kernel <- as.character(raw_results$kernel)
+raw_results$criterion <- as.character(raw_results$criterion)
 
 # Split by grouping keys
 .grp <- interaction(
@@ -483,6 +493,7 @@ raw_results$kernel <- as.character(raw_results$kernel)
   raw_results$Mmod,
   raw_results$Smod,
   raw_results$kernel,
+  raw_results$criterion,
   drop = TRUE
 )
 
@@ -492,6 +503,7 @@ summ_list <- lapply(split(raw_results, .grp), function(df) {
     Mmod = df$Mmod[1],
     Smod = df$Smod[1],
     kernel = df$kernel[1],
+    criterion = df$criterion[1],
     # ISE stats
     mean_ISE = mean(df$ISE, na.rm = TRUE),
     sd_ISE = sd(df$ISE, na.rm = TRUE),
