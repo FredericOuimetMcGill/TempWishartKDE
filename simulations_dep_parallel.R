@@ -270,8 +270,8 @@ ISE <- function(
   )
 
   # print(result)
-  # Return the result of the integral * 10^7
-  return(1e7 * result$integral)
+  # Return the result of the integral * 10^6
+  return(1e6 * result$integral)
 }
 
 ##################
@@ -290,7 +290,7 @@ cores_per_node <- 64 # number of cores for each node in the super-computer
 resources_list <- list(
   cpus_per_task = cores_per_node,
   mem = "240G",
-  walltime = "24:00:00",
+  walltime = "96:00:00",
   nodes = 1
   # Omit 'partition' to let SLURM choose
 )
