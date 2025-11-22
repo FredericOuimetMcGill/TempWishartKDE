@@ -290,7 +290,7 @@ cores_per_node <- 64 # number of cores for each node in the super-computer
 resources_list <- list(
   cpus_per_task = cores_per_node,
   mem = "240G",
-  walltime = "96:00:00",
+  walltime = "48:00:00",
   nodes = 1
   # Omit 'partition' to let SLURM choose
 )
@@ -300,7 +300,7 @@ resources_list <- list(
 ##############################
 
 RR <- 1:1024 # replications
-nobs <- c(125L, 250L, 500L)
+nobs <- c(100L, 200L)
 Mmod <- c("M1", "M2", "M3")
 Smod <- c("S1", "S2", "S3")
 kernels <- c("Wishart", "smlnorm")
