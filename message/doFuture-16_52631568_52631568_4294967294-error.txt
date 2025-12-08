@@ -1,0 +1,5 @@
+Loading required package: doFuture
+Loading required package: foreach
+Loading required package: future
+Loading required package: parallel
+slurmstepd: error: *** JOB 52631568 ON nc20624 CANCELLED AT 2025-11-25T00:11:06 DUE TO TIME LIMIT ***

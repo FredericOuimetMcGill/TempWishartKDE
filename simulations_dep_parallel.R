@@ -264,7 +264,7 @@ ISE <- function(
     lower = lower_limit,
     upper = upper_limit,
     method = method,
-    relTol = 1e-3,
+    relTol = tol,
     maxEval = neval,
     kernel = kernel
   )
@@ -300,7 +300,7 @@ resources_list <- list(
 ##############################
 
 RR <- 1:1024 # replications
-nobs <- c(100L, 200L)
+nobs <- c(100L, 200L, 300L)
 Mmod <- c("M1", "M2", "M3")
 Smod <- c("S1", "S2", "S3")
 kernels <- c("Wishart", "smlnorm")
@@ -399,7 +399,7 @@ res <- foreach::foreach(
                   x = xs,
                   criterion = criteria[c_idx],
                   h = ceiling(nobs[i]^0.25), # adjustment for serial dependence
-                  kernel = kernels[l]
+                  kernel = kernels[l],
                 )
                 
                 try_ISE <- try(
