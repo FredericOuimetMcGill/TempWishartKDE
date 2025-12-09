@@ -290,7 +290,7 @@ cores_per_node <- 64 # number of cores for each node in the super-computer
 resources_list <- list(
   cpus_per_task = cores_per_node,
   mem = "240G",
-  walltime = "48:00:00",
+  walltime = "8:00:00",
   nodes = 1
   # Omit 'partition' to let SLURM choose
 )
@@ -412,7 +412,7 @@ res <- foreach::foreach(
                     kernel = kernels[l],
                     lb = 0,
                     ub = Inf,
-                    tol = 1e-3,
+                    tol = 1e-2,
                     method = "hcubature"
                   ),
                   silent = FALSE
