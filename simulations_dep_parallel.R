@@ -303,7 +303,7 @@ RR <- 1:1024 # replications
 nobs <- c(100L, 200L, 300L)
 Mmod <- c("M1", "M2", "M3")
 Smod <- c("S1", "S2", "S3")
-kernels <- c("Wishart", "smlnorm")
+kernels <- c("Wishart", "smlnorm", "smnorm")
 criteria <- c("lscv", "lcv")
 K <- 4
 
@@ -382,7 +382,7 @@ res <- foreach::foreach(
       for (i in seq_along(nobs)) {
         for (j in seq_along(Mmod)) {
           for (k in seq_along(Smod)) {
-            local_rows <- vector("list", length(kernels) * length(criteria))
+            local_rows <- list()
             
             xs <- simu_rWAR(
               n = nobs[i],
@@ -393,13 +393,15 @@ res <- foreach::foreach(
             
             idx_local <- 0L
             for (l in seq_along(kernels)) {
-              for (c_idx in seq_along(criteria)) {
+              criteria_this <- if (kernels[l] == "smnorm") "lcv" else criteria
+              
+              for (crit in criteria_this) {
                 start_time <- Sys.time()
                 band <- ksm:::bandwidth_optim(
                   x = xs,
-                  criterion = criteria[c_idx],
+                  criterion = crit,
                   h = ceiling(nobs[i]^0.25), # adjustment for serial dependence
-                  kernel = kernels[l],
+                  kernel = kernels[l]
                 )
                 
                 try_ISE <- try(
@@ -432,7 +434,7 @@ res <- foreach::foreach(
                   Mmod = j,
                   Smod = k,
                   kernel = kernels[l],
-                  criterion = criteria[c_idx],
+                  criterion = crit,
                   ISE = try_ISE,
                   bandwidth = band,
                   timing = timing
