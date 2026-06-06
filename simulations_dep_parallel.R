@@ -111,11 +111,11 @@ simu_rWAR <- function(
     M <- diag(rep(0.5, 2))
   }
   if (Smod == "S1") {
-    S <- matrix(c(1, 0.8, 0.8, 1), nrow=2)
-  } else if (Smod == "S2") {
     S <- matrix(c(1, 0.9, 0.9, 1), nrow=2)
-  } else {
+  } else if (Smod == "S2") {
     S <- matrix(c(1, 0.95, 0.95, 1), nrow=2)
+  } else {
+    S <- matrix(c(1, 0.99, 0.99, 1), nrow=2)
   }
   ksm::rWAR(
     n = n,
@@ -160,11 +160,11 @@ simu_fdens_WAR <- function(
     M <- diag(rep(0.5, 2))
   }
   if (Smod == "S1") {
-    S <- matrix(c(1, 0.8, 0.8, 1), nrow=2)
-  } else if (Smod == "S2") {
     S <- matrix(c(1, 0.9, 0.9, 1), nrow=2)
-  } else {
+  } else if (Smod == "S2") {
     S <- matrix(c(1, 0.95, 0.95, 1), nrow=2)
+  } else {
+    S <- matrix(c(1, 0.99, 0.99, 1), nrow=2)
   }
   
   Sigma_inf <- ksm::Riccati(M = M, S = S)$solution
