@@ -40,8 +40,6 @@ vars_to_export <- c(
   "setup_parallel_cluster",
   "simu_rWAR",
   "simu_fdens_WAR",
-  "matexp_sym",
-  "matexp_cube",
   "Smod",
   "timing"
 )
@@ -171,22 +169,6 @@ simu_fdens_WAR <- function(
   
   Sigma_inf <- ksm::Riccati(M = M, S = S)$solution
   c(ksm::dWishart(x, df = K, S = Sigma_inf, log = FALSE))
-}
-
-matexp_sym <- function(A) {
-  eig <- eigen((A + t(A)) / 2, symmetric = TRUE)
-  E <- eig$vectors %*%
-    diag(exp(eig$values), nrow = length(eig$values)) %*%
-    t(eig$vectors)
-  (E + t(E)) / 2
-}
-
-matexp_cube <- function(x) {
-  y <- x
-  for (ii in seq_len(dim(x)[3L])) {
-    y[, , ii] <- matexp_sym(x[, , ii])
-  }
-  y
 }
 
 #' Integrated squared error of kernel density estimator for symmetric matrices
@@ -399,25 +381,14 @@ res <- foreach::foreach(
             
             idx_local <- 0L
             for (l in seq_along(kernels)) {
-              criteria_this <- criteria
-              
-              for (crit in criteria_this) {
+              for (crit in criteria) {
                 start_time <- Sys.time()
-                if (kernels[l] == "smnorm" && crit == "lscv") {
-                  band <- ksm:::bandwidth_optim(
-                    x = matexp_cube(xs),
-                    criterion = crit,
-                    h = ceiling(nobs[i]^0.25), # adjustment for serial dependence
-                    kernel = "smlnorm"
-                  )
-                } else {
-                  band <- ksm:::bandwidth_optim(
-                    x = xs,
-                    criterion = crit,
-                    h = ceiling(nobs[i]^0.25), # adjustment for serial dependence
-                    kernel = kernels[l]
-                  )
-                }
+                band <- ksm:::bandwidth_optim(
+                  x = xs,
+                  criterion = crit,
+                  h = ceiling(nobs[i]^0.25), # adjustment for serial dependence
+                  kernel = kernels[l]
+                )
                 
                 try_ISE <- try(
                   ISE(
