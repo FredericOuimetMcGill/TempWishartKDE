@@ -24,6 +24,13 @@ vars_to_export <- c(
   "combo",
   "cores_per_node",
   "criteria",
+  "iw_logsumexp",
+  "iw_lmgamma",
+  "iw_spd_array",
+  "iw_prepare",
+  "make_kdens_inverseWishart",
+  "kdens_inverseWishart",
+  "bandwidth_optim_inverseWishart",
   "ISE",
   "IAE",
   "kernels",
@@ -41,17 +48,18 @@ vars_to_export <- c(
   "simu_rWAR",
   "simu_fdens_WAR",
   "Smod",
-  "timing"
+  "timing",
+  "vars_to_export"
 )
 
 # Sets up a parallel cluster, loads necessary libraries, and exports required variables globally
 
-setup_parallel_cluster <- function() {
-  num_cores <<- detectCores()
-  cl <<- makeCluster(num_cores)
+setup_parallel_cluster <- function(export_env = parent.frame()) {
+  num_cores <- as.integer(cores_per_node)
+  cl <- parallel::makeCluster(num_cores)
   
   # Export the list of libraries to the worker nodes
-  clusterExport(cl, varlist = "libraries_to_load")
+  clusterExport(cl, varlist = "libraries_to_load", envir = export_env)
   
   # Load necessary libraries on each cluster node
   invisible(clusterEvalQ(cl, {
@@ -59,21 +67,181 @@ setup_parallel_cluster <- function() {
   }))
   
   # Export all necessary objects, functions, and parameters to the worker nodes
-  clusterExport(cl, varlist = vars_to_export)
+  clusterExport(cl, varlist = vars_to_export, envir = export_env)
   
   return(cl) # Return the cluster object
 }
 
-# Initialize all variables in the list as NULL except vars_to_export and setup_parallel_cluster
+# Initialize missing placeholders without replacing existing libraries or functions
 
 invisible(
   lapply(
     vars_to_export[
       !(vars_to_export %in% c("vars_to_export", "setup_parallel_cluster"))
     ],
-    function(x) assign(x, NULL, envir = .GlobalEnv)
+    function(x) {
+      if (!exists(x, envir = .GlobalEnv, inherits = FALSE)) {
+        assign(x, NULL, envir = .GlobalEnv)
+      }
+    }
   )
 )
+
+########################################
+## Inverse Wishart KDE and selectors  ##
+########################################
+
+# These helpers implement the manuscript's variable-interchanged kernel:
+# f_IW(S) = mean_i K_{1/b + d + 1, b X_i}(S).
+# ksm currently supports only Wishart, smlnorm and smnorm kernels.
+# To reuse just these functions in another simulation script, evaluate this
+# section without running the experiment below.
+
+iw_logsumexp <- function(z) {
+  zmax <- max(z)
+  if (!is.finite(zmax)) return(zmax)
+  zmax + log(sum(exp(z - zmax)))
+}
+
+iw_lmgamma <- function(a, d) {
+  d * (d - 1) * log(pi) / 4 + sum(lgamma(a - (seq_len(d) - 1) / 2))
+}
+
+iw_spd_array <- function(x) {
+  if (is.matrix(x)) x <- array(x, dim = c(nrow(x), ncol(x), 1L))
+  if (length(dim(x)) != 3L || dim(x)[1] != dim(x)[2] || dim(x)[3] < 1L ||
+      any(!is.finite(x))) stop("Expected a finite d x d x n array of SPD matrices.")
+  for (i in seq_len(dim(x)[3])) {
+    Xi <- x[, , i, drop = FALSE]
+    dim(Xi) <- dim(x)[1:2]
+    if (!isSymmetric(Xi, tol = 1e-10)) stop("Matrices must be symmetric.")
+    chol(Xi) # also validates positive definiteness
+  }
+  x
+}
+
+iw_prepare <- function(x, overlap = FALSE) {
+  x <- iw_spd_array(x)
+  d <- dim(x)[1]
+  n <- dim(x)[3]
+  xvec <- matrix(x, nrow = d * d, ncol = n)
+  inverses <- matrix(NA_real_, nrow = d * d, ncol = n)
+  logdet <- numeric(n)
+  for (i in seq_len(n)) {
+    Xi <- matrix(x[, , i], nrow = d, ncol = d)
+    Ri <- chol(Xi)
+    logdet[i] <- 2 * sum(log(diag(Ri)))
+    inverses[, i] <- as.vector(chol2inv(Ri))
+  }
+  out <- list(x = x, d = d, n = n, xvec = xvec,
+              inverses = inverses, logdet = logdet)
+  if (overlap) {
+    logdet_sum <- matrix(NA_real_, nrow = n, ncol = n)
+    for (i in seq_len(n)) {
+      for (j in seq_len(i)) {
+        Zij <- matrix(x[, , i] + x[, , j], nrow = d, ncol = d)
+        logdet_sum[i, j] <- logdet_sum[j, i] <- 2 * sum(log(diag(chol(Zij))))
+      }
+    }
+    out$logdet_sum <- logdet_sum
+  }
+  out
+}
+
+# Construct once per sample and bandwidth before numerical integration.
+# The returned function accepts evaluation matrices x and an optional log flag.
+make_kdens_inverseWishart <- function(xs, b) {
+  if (length(b) != 1L || !is.finite(b) || b <= 0) stop("b must be positive.")
+  sample <- iw_prepare(xs)
+  d <- sample$d
+  alpha <- 1 / (2 * b)
+  a <- alpha + (d + 1) / 2
+  log_weights <- -a * sample$logdet -
+    d * a * log(2 * b) - iw_lmgamma(a, d)
+  log_n <- log(sample$n)
+
+  function(x, log = FALSE) {
+    x <- iw_spd_array(x)
+    if (dim(x)[1] != d) stop("x and xs must have the same matrix dimension.")
+    neval <- dim(x)[3]
+    xvec <- matrix(x, nrow = d * d, ncol = neval)
+    logdet <- vapply(seq_len(neval), function(i) {
+      2 * sum(base::log(diag(chol(matrix(x[, , i], nrow = d, ncol = d)))))
+    }, numeric(1))
+    # Rows are evaluation points; columns are observations in the KDE.
+    log_kernel <- outer(alpha * logdet, log_weights, "+") -
+      crossprod(xvec, sample$inverses) / (2 * b)
+    log_density <- apply(log_kernel, 1L, iw_logsumexp) - log_n
+    if (log) log_density else exp(log_density)
+  }
+}
+
+# x: evaluation matrices; xs: observations. All densities use Lebesgue measure.
+kdens_inverseWishart <- function(x, xs, b, log = FALSE) {
+  make_kdens_inverseWishart(xs, b)(x, log = log)
+}
+
+bandwidth_optim_inverseWishart <- function(
+    x, criterion = c("lscv", "lcv"), tol = 1e-4,
+    h = 1L, bounds = c(1e-4, 10)
+) {
+  criterion <- match.arg(criterion)
+  if (length(bounds) != 2L || any(!is.finite(bounds))) stop("Invalid bandwidth bounds.")
+  bounds <- sort(bounds)
+  if (bounds[1] <= 0 || bounds[2] <= bounds[1]) stop("Invalid bandwidth bounds.")
+  if (length(tol) != 1L || !is.finite(tol) || tol <= 0) stop("tol must be positive.")
+  if (length(h) != 1L || !is.finite(h) || h < 1 || h != as.integer(h)) {
+    stop("h must be a positive integer.")
+  }
+  cache <- iw_prepare(x, overlap = criterion == "lscv")
+  d <- cache$d
+  n <- cache$n
+  keep <- abs(outer(seq_len(n), seq_len(n), "-")) >= h
+  nkeep <- rowSums(keep)
+  if (any(nkeep == 0L)) stop("h leaves at least one validation point without observations.")
+  trace_mat <- crossprod(cache$xvec, cache$inverses)
+  logdet_pair <- outer(cache$logdet, cache$logdet, "+")
+  cdim <- (d + 1) / 2
+  rdim <- d * cdim
+
+  objective <- function(b) {
+    alpha <- 1 / (2 * b)
+    a <- alpha + cdim
+    log_kernel <- outer(alpha * cache$logdet, -a * cache$logdet, "+") -
+      trace_mat / (2 * b) - d * a * log(2 * b) - iw_lmgamma(a, d)
+    log_kernel[!keep] <- -Inf
+    log_cv <- apply(log_kernel, 1L, iw_logsumexp) - log(nkeep)
+    if (criterion == "lcv") return(-mean(log_cv))
+
+    # This squared-density integral equals the overlap for the Wishart KDE.
+    log_overlap <- iw_lmgamma(2 * alpha + cdim, d) -
+      2 * iw_lmgamma(a, d) - rdim * log(2 * b) +
+      alpha * logdet_pair - (2 * alpha + cdim) * cache$logdet_sum
+    log_l2 <- iw_logsumexp(as.vector(log_overlap)) - 2 * log(n)
+    # Match ksm's LSCV convention: pool all retained validation pairs.
+    log_cross <- log(2) + iw_logsumexp(log_kernel[keep]) - log(sum(nkeep))
+
+    # A strictly increasing signed-log transform preserves the LSCV minimizer
+    # and avoids overflow in the difference of two positive sums.
+    if (log_l2 == log_cross) return(0)
+    sign_q <- if (log_l2 > log_cross) 1 else -1
+    log_abs_q <- max(log_l2, log_cross) +
+      log(-expm1(-abs(log_l2 - log_cross)))
+    sign_q * (max(log_abs_q, 0) + log1p(exp(-abs(log_abs_q))))
+  }
+
+  # Match ksm::bandwidth_optim, including its endpoint-bound expansions.
+  opt <- stats::optimize(objective, interval = bounds, tol = tol)$minimum
+  if ((opt - bounds[1]) < 1e-3) {
+    opt <- stats::optimize(objective, interval = c(1e-8, bounds[1] * 1.1),
+                           tol = tol)$minimum
+  }
+  if ((bounds[2] - opt) < 1e-3) {
+    opt <- stats::optimize(objective, interval = c(bounds[2] * 0.9, 1e4),
+                           tol = tol)$minimum
+  }
+  opt
+}
 
 #' Simulation study serial dependence simulation from WAR(1)
 #' @param n sample size
@@ -177,7 +345,7 @@ simu_fdens_WAR <- function(
 #' @param x sample of symmetric matrix observations from which to build the kernel density kernel
 #' @param bandwidth double for the bandwidth of the kernel
 #' @param fdens density of the target function from which points are drawn.
-#' @param kernel string, one of \code{Wishart}, \code{smlnorm} (log-Gaussian) or \code{smnorm} (Gaussian).
+#' @param kernel string, one of \code{Wishart}, \code{inverseWishart}, \code{smlnorm} (log-Gaussian) or \code{smnorm} (Gaussian).
 #' @param tol double for tolerance of numerical integral
 #' @param lb lower bound for integration range of eigenvalues
 #' @param ub upper bound for integration range of eigenvalues
@@ -188,7 +356,7 @@ ISE <- function(
     x,
     bandwidth,
     fdens,
-    kernel = c("Wishart", "smlnorm", "smnorm"),
+    kernel = c("Wishart", "inverseWishart", "smlnorm", "smnorm"),
     tol = 1e-3,
     lb = 0,
     ub = Inf,
@@ -209,8 +377,16 @@ ISE <- function(
     lb >= 0,
     ub > lb,
     tol > 0,
-    is.numeric(bandwidth) & length(bandwidth) == 1L
+    is.numeric(bandwidth) & length(bandwidth) == 1L,
+    is.finite(bandwidth),
+    bandwidth > 0
   )
+  # Reuse the sample determinants and inverses throughout numerical integration.
+  iw_density <- if (kernel == "inverseWishart") {
+    make_kdens_inverseWishart(xs = x, b = bandwidth)
+  } else {
+    NULL
+  }
   integrand <- function(vars, kernel) {
     # Construct SPD matrix S
     if (length(vars) == 3L) {
@@ -226,15 +402,19 @@ ISE <- function(
     }
     S <- array(S, dim = c(nrow(S), ncol(S), 1))
     
-    # Compute the squared difference between the kernel and the target density
-    diff_squared <- (ksm::kdens_symmat(
-      x = S,
-      xs = x,
-      b = bandwidth,
-      kernel = kernel,
-      log = FALSE
-    ) -
-      fdens(S))^2
+    # Compute the squared difference between the kernel and the target density.
+    density_estimate <- if (kernel == "inverseWishart") {
+      iw_density(S)
+    } else {
+      ksm::kdens_symmat(
+        x = S,
+        xs = x,
+        b = bandwidth,
+        kernel = kernel,
+        log = FALSE
+      )
+    }
+    diff_squared <- (density_estimate - fdens(S))^2
     
     # Return the product of diff_squared and the Jacobian factor
     return(diff_squared * jacobian_value)
@@ -291,7 +471,7 @@ RR <- 1:1024 # replications
 nobs <- c(100L, 200L, 300L)
 Mmod <- c("M1", "M2", "M3")
 Smod <- c("S1", "S2", "S3")
-kernels <- c("Wishart", "smlnorm", "smnorm")
+kernels <- c("Wishart", "inverseWishart", "smlnorm", "smnorm")
 criteria <- c("lscv", "lcv")
 K <- 4
 
@@ -383,30 +563,47 @@ res <- foreach::foreach(
             for (l in seq_along(kernels)) {
               for (crit in criteria) {
                 start_time <- Sys.time()
-                band <- ksm:::bandwidth_optim(
-                  x = xs,
-                  criterion = crit,
-                  h = ceiling(nobs[i]^0.25), # adjustment for serial dependence
-                  kernel = kernels[l]
-                )
-                
-                try_ISE <- try(
-                  ISE(
-                    x = xs,
-                    bandwidth = band,
-                    fdens = function(x) {
-                      simu_fdens_WAR(x = x, Mmod = Mmod[j], Smod = Smod[k], K = K)
-                    },
-                    kernel = kernels[l],
-                    lb = 0,
-                    ub = Inf,
-                    tol = 1e-2,
-                    method = "hcubature"
-                  ),
+                band <- try(
+                  if (kernels[l] == "inverseWishart") {
+                    bandwidth_optim_inverseWishart(
+                      x = xs,
+                      criterion = crit,
+                      h = ceiling(nobs[i]^0.25) # adjustment for serial dependence
+                    )
+                  } else {
+                    ksm:::bandwidth_optim(
+                      x = xs,
+                      criterion = crit,
+                      h = ceiling(nobs[i]^0.25),
+                      kernel = kernels[l]
+                    )
+                  },
                   silent = FALSE
                 )
-                if (inherits(try_ISE, "try-error")) {
-                  try_ISE <- NA
+                
+                if (inherits(band, "try-error") || !is.numeric(band) ||
+                    length(band) != 1L || !is.finite(band) || band <= 0) {
+                  band <- NA_real_
+                  try_ISE <- NA_real_
+                } else {
+                  try_ISE <- try(
+                    ISE(
+                      x = xs,
+                      bandwidth = band,
+                      fdens = function(x) {
+                        simu_fdens_WAR(x = x, Mmod = Mmod[j], Smod = Smod[k], K = K)
+                      },
+                      kernel = kernels[l],
+                      lb = 0,
+                      ub = Inf,
+                      tol = 1e-2,
+                      method = "hcubature"
+                    ),
+                    silent = FALSE
+                  )
+                  if (inherits(try_ISE, "try-error")) {
+                    try_ISE <- NA_real_
+                  }
                 }
                 timing <- as.numeric(difftime(
                   Sys.time(),
