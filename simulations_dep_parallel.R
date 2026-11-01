@@ -458,7 +458,7 @@ cores_per_node <- 64 # number of cores for each node in the super-computer
 resources_list <- list(
   cpus_per_task = cores_per_node,
   mem = "240G",
-  walltime = "8:00:00",
+  walltime = "12:00:00",
   nodes = 1
   # Omit 'partition' to let SLURM choose
 )
