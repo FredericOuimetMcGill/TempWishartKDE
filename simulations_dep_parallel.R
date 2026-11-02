@@ -254,7 +254,7 @@ simu_rWAR <- function(
     n,
     Mmod = c("M1", "M2", "M3"),
     Smod = c("S1", "S2", "S3"),
-    K = 2L
+    K = 5L
 ) {
   Mmod <- match.arg(Mmod)
   Smod <- match.arg(Smod)
@@ -304,7 +304,7 @@ simu_fdens_WAR <- function(
     x,
     Mmod = c("M1", "M2", "M3"),
     Smod = c("S1", "S2", "S3"),
-    K = 2L
+    K = 5L
 ) {
   Mmod <- match.arg(Mmod)
   Smod <- match.arg(Smod)
@@ -473,7 +473,7 @@ Mmod <- c("M1", "M2", "M3")
 Smod <- c("S1", "S2", "S3")
 kernels <- c("Wishart", "inverseWishart", "smlnorm", "smnorm")
 criteria <- c("lscv", "lcv")
-K <- 4
+K <- 5
 
 ###############
 ## Main code ##
