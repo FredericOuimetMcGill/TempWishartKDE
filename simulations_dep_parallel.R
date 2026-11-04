@@ -254,7 +254,7 @@ simu_rWAR <- function(
     n,
     Mmod = c("M1", "M2", "M3"),
     Smod = c("S1", "S2", "S3"),
-    K = 3L
+    K = 7L
 ) {
   Mmod <- match.arg(Mmod)
   Smod <- match.arg(Smod)
@@ -304,7 +304,7 @@ simu_fdens_WAR <- function(
     x,
     Mmod = c("M1", "M2", "M3"),
     Smod = c("S1", "S2", "S3"),
-    K = 3L
+    K = 7L
 ) {
   Mmod <- match.arg(Mmod)
   Smod <- match.arg(Smod)
@@ -458,7 +458,7 @@ cores_per_node <- 64 # number of cores for each node in the super-computer
 resources_list <- list(
   cpus_per_task = cores_per_node,
   mem = "240G",
-  walltime = "8:00:00",
+  walltime = "12:00:00",
   nodes = 1
   # Omit 'partition' to let SLURM choose
 )
@@ -473,7 +473,7 @@ Mmod <- c("M1", "M2", "M3")
 Smod <- c("S1", "S2", "S3")
 kernels <- c("Wishart", "inverseWishart", "smlnorm", "smnorm")
 criteria <- c("lscv", "lcv")
-K <- 3
+K <- 7
 
 ###############
 ## Main code ##
