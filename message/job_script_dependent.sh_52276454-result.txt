@@ -1,3 +1,0 @@
-[1] "Elapsed time: 0.24 minutes"
-[1] "Raw results saved to raw_ISE_dep.csv"
-[1] "Summary results saved to summary_dep.csv"
